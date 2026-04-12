@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Marin Fire Weather Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
+  :root {
+    --bg: #0a0b0f;
+    --surface: #111318;
+    --surface2: #1a1c24;
+    --surface3: #22252e;
+    --border: #282c38;
+    --text: #e4e6ec;
+    --text-dim: #7b8194;
+    --accent: #e8913a;
+    --red: #dc4444;
+    --orange: #e87a30;
+    --amber: #e8b430;
+    --yellow: #e8d44a;
+    --green: #36b89a;
+    --blue: #4a8fe8;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: 'Outfit', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    opacity: 0.015;
+    background: repeating-conic-gradient(var(--text) 0% 25%, transparent 0% 50%) 0 0 / 40px 40px;
+    pointer-events: none; z-index: 0;
+  }
+
+  .dash { max-width: 1380px; margin: 0 auto; padding: 20px 16px 64px; position: relative; z-index: 1; }
+
+  /* ── HEADER ── */
+  .hdr { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+  .hdr-l h1 { font-size: 26px; font-weight: 800; letter-spacing: -0.6px; line-height: 1.1; }
+  .hdr-l h1 .ember { display: inline-block; width: 30px; height: 30px; background: linear-gradient(135deg, #e87a30, #dc4444); border-radius: 7px; text-align: center; line-height: 30px; font-size: 16px; margin-right: 10px; vertical-align: middle; box-shadow: 0 2px 12px rgba(220,68,68,0.25); }
+  .hdr-l .sub { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .hdr-r { text-align: right; font-family: 'JetBrains Mono', monospace; }
+  .hdr-r .clock { font-size: 22px; font-weight: 600; font-family: 'Outfit', sans-serif; }
+  .hdr-r .date { font-size: 12px; color: var(--text-dim); }
+  .hdr-r .live { display: inline-flex; align-items: center; gap: 5px; margin-top: 6px; font-size: 11px; color: var(--green); }
+  .hdr-r .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: blink 2s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(54,184,154,0.4)} 50%{opacity:0.5;box-shadow:0 0 0 5px rgba(54,184,154,0)} }
+
+  /* ── DATA SOURCE BADGE ── */
+  .src-badge { display: inline-flex; align-items: center; gap: 5px; background: rgba(74,143,232,0.1); border: 1px solid rgba(74,143,232,0.2); border-radius: 5px; padding: 3px 8px; font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--blue); margin-top: 6px; }
+
+  /* ── THREAT STRIP ── */
+  .threat { border-radius: 10px; padding: 16px 20px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; border: 1px solid; transition: all 0.5s; }
+  .threat.low { border-color: var(--green); background: rgba(54,184,154,0.06); }
+  .threat.mod { border-color: var(--amber); background: rgba(232,180,48,0.06); }
+  .threat.elev { border-color: var(--orange); background: rgba(232,122,48,0.06); }
+  .threat.crit { border-color: var(--red); background: rgba(220,68,68,0.06); }
+  .threat .tl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; font-family: 'JetBrains Mono', monospace; }
+  .threat .tv { font-size: 20px; font-weight: 800; margin-top: 2px; }
+  .threat .td { font-size: 12px; color: var(--text-dim); text-align: right; max-width: 380px; }
+  .threat.low .tl,.threat.low .tv { color: var(--green); }
+  .threat.mod .tl,.threat.mod .tv { color: var(--amber); }
+  .threat.elev .tl,.threat.elev .tv { color: var(--orange); }
+  .threat.crit .tl,.threat.crit .tv { color: var(--red); }
+
+  /* ── METRIC CARDS ── */
+  .metrics { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 20px; }
+  .mc { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; overflow: hidden; }
+  .mc:hover { border-color: #363a48; }
+  .mc .mc-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .mc .mc-lbl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+  .mc .mc-ico { font-size: 18px; }
+  .mc .mc-val { font-size: 34px; font-weight: 700; line-height: 1; letter-spacing: -1px; }
+  .mc .mc-unit { font-size: 15px; font-weight: 400; color: var(--text-dim); }
+  .mc .mc-note { font-size: 11px; color: var(--text-dim); margin-top: 8px; font-family: 'JetBrains Mono', monospace; }
+  .mc .mc-bar { height: 3px; border-radius: 2px; background: var(--surface3); margin-top: 10px; overflow: hidden; }
+  .mc .mc-bar-f { height: 100%; border-radius: 2px; transition: width 0.8s ease-out; }
+
+  /* ── SECTION TITLES ── */
+  .stitle { font-size: 14px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; color: var(--text-dim); }
+  .stitle::after { content:''; flex:1; height:1px; background:var(--border); }
+  .stitle .live-tag { font-size: 9px; font-family: 'JetBrains Mono', monospace; background: rgba(54,184,154,0.15); color: var(--green); padding: 2px 6px; border-radius: 3px; font-weight: 600; letter-spacing: 0.5px; }
+
+  /* ── RAWS STATIONS ── */
+  .raws { margin-bottom: 20px; }
+  .raws-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: 10px; }
+  .raws-card { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 14px 16px; transition: border-color 0.3s; }
+  .raws-card:hover { border-color: #363a48; }
+  .raws-card.stale { border-left: 3px solid var(--amber); }
+  .raws-card.offline { border-left: 3px solid var(--red); opacity: 0.6; }
+  .raws-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
+  .raws-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .raws-id { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); background: var(--surface2); padding: 1px 5px; border-radius: 3px; }
+  .raws-sub { font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-bottom: 8px; }
+  .raws-row { display: grid; grid-template-columns: repeat(5,1fr); gap: 4px; }
+  .raws-m { text-align: center; }
+  .raws-m .rl { font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; }
+  .raws-m .rv { font-size: 15px; font-weight: 600; }
+  .raws-m .rv small { font-size: 9px; color: var(--text-dim); font-weight: 400; }
+  .sdot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; }
+  .sdot.on { background: var(--green); }
+  .sdot.off { background: var(--red); }
+  .sdot.stale { background: var(--amber); }
+
+  /* ── TIMELINE ── */
+  .tl-section { margin-bottom: 20px; }
+  .tl-scroll { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .tl-slot { min-width: 74px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 10px; text-align: center; flex-shrink: 0; }
+  .tl-slot.now { border-color: var(--accent); background: rgba(232,145,58,0.04); }
+  .tl-hr { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); margin-bottom: 6px; }
+  .tl-tmp { font-size: 17px; font-weight: 600; }
+  .tl-rh { font-size: 11px; color: var(--blue); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+  .tl-wind { font-size: 10px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-top: 3px; }
+  .tl-poi { font-size: 9px; font-family: 'JetBrains Mono', monospace; margin-top: 4px; font-weight: 600; }
+
+  /* ── POI + INDICES ── */
+  .bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 20px; }
+  .bcard { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .gauge-wrap { width: 190px; height: 105px; margin: 12px auto; position: relative; }
+  .gauge-wrap svg { width: 100%; height: 100%; }
+  .gauge-val { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); text-align: center; font-weight: 700; font-size: 30px; }
+  .gauge-val small { display: block; font-size: 10px; color: var(--text-dim); font-weight: 400; font-family: 'JetBrains Mono', monospace; }
+  .idx-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .idx-tbl th { text-align:left; font-size:10px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; padding:7px 8px; border-bottom:1px solid var(--border); }
+  .idx-tbl td { padding:7px 8px; border-bottom:1px solid rgba(40,44,56,0.5); }
+  .idx-tbl tr:last-child td { border-bottom:none; }
+
+  .cfg { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; flex-wrap: wrap; gap: 8px; }
+  .cfg a { color: var(--blue); text-decoration: none; }
+  .cfg a:hover { text-decoration: underline; }
+  .rbtn { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 7px 14px; border-radius: 5px; font-family: 'JetBrains Mono', monospace; font-size: 11px; cursor: pointer; }
+  .rbtn:hover { background: var(--surface3); }
+
+  .loader-overlay { position: fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:999; transition: opacity 0.4s; }
+  .loader-overlay.gone { opacity:0; pointer-events:none; }
+  .loader-bar { width: 180px; height: 2px; background: var(--surface2); border-radius: 1px; overflow: hidden; margin: 14px auto; }
+  .loader-bar-f { width: 35%; height: 100%; background: linear-gradient(90deg, var(--orange), var(--red)); border-radius: 1px; animation: lslide 1s ease-in-out infinite; }
+  @keyframes lslide { 0%{transform:translateX(-100%)} 100%{transform:translateX(400%)} }
+
+  .err-msg { background: rgba(220,68,68,0.1); border: 1px solid rgba(220,68,68,0.3); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 12px; color: var(--red); font-family: 'JetBrains Mono', monospace; display: none; }
+
+  .c-low { color: var(--green); } .c-mod { color: var(--amber); } .c-elev { color: var(--orange); } .c-crit { color: var(--red); }
+
+  @media (max-width:900px) { .metrics{grid-template-columns:repeat(2,1fr)} .bottom-row{grid-template-columns:1fr} .hdr{flex-direction:column;gap:10px} .hdr-r{text-align:left} }
+  @media (max-width:500px) { .metrics{grid-template-columns:1fr} .raws-grid{grid-template-columns:1fr} .raws-row{grid-template-columns:repeat(3,1fr)} }
+</style>
+</head>
+<body>
+
+<div class="loader-overlay" id="loader">
+  <div style="text-align:center">
+    <div style="font-size:28px; margin-bottom:6px;">🔥</div>
+    <div class="loader-bar"><div class="loader-bar-f"></div></div>
+    <div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-dim);">Fetching live RAWS data from Synoptic…</div>
+  </div>
+</div>
+
+<div class="dash">
+
+  <div class="hdr">
+    <div class="hdr-l">
+      <h1><span class="ember">🔥</span>Marin County Fire Weather</h1>
+      <div class="sub">Mt. Tamalpais · Mill Valley · Sausalito — Live RAWS</div>
+      <div class="src-badge">◉ LIVE DATA — Synoptic/MesoWest API + NWS</div>
+    </div>
+    <div class="hdr-r">
+      <div class="clock" id="clock">--:--</div>
+      <div class="date" id="dateEl">---</div>
+      <div class="live"><span class="dot"></span><span id="lastUpd">Updating…</span></div>
+    </div>
+  </div>
+
+  <div class="err-msg" id="errMsg"></div>
+
+  <div class="threat low" id="threat">
+    <div>
+      <div class="tl">Fire Threat Level</div>
+      <div class="tv" id="threatLvl">Loading…</div>
+    </div>
+    <div class="td" id="threatDtl">Assessing conditions…</div>
+  </div>
+
+  <div class="metrics">
+    <div class="mc">
+      <div class="mc-top"><span class="mc-lbl">Temperature</span><span class="mc-ico">🌡</span></div>
+      <div class="mc-val" id="mTemp">--<span class="mc-unit">°F</span></div>
+      <div class="mc-note" id="mTempN">Hi --° / Lo --°</div>
+    </div>
+    <div class="mc">
+      <div class="mc-top"><span class="mc-lbl">Relative Humidity</span><span class="mc-ico">💧</span></div>
+      <div class="mc-val" id="mRH">--<span class="mc-unit">%</span></div>
+      <div class="mc-note" id="mRHN">--</div>
+      <div class="mc-bar"><div class="mc-bar-f" id="mRHBar" style="width:0%;"></div></div>
+    </div>
+    <div class="mc">
+      <div class="mc-top"><span class="mc-lbl">Prob. of Ignition</span><span class="mc-ico">⚡</span></div>
+      <div class="mc-val" id="mPOI">--<span class="mc-unit">%</span></div>
+      <div class="mc-note" id="mPOIN">--</div>
+    </div>
+    <div class="mc">
+      <div class="mc-top"><span class="mc-lbl">Wind</span><span class="mc-ico">💨</span></div>
+      <div class="mc-val" id="mWind">--<span class="mc-unit">mph</span></div>
+      <div class="mc-note" id="mWindN">-- / Gusts --</div>
+    </div>
+  </div>
+
+  <div class="raws">
+    <div class="stitle">📡 Marin RAWS Stations <span class="live-tag">● LIVE</span></div>
+    <div class="raws-grid" id="rawsGrid"></div>
+  </div>
+
+  <div class="tl-section">
+    <div class="stitle">📊 24-Hour Fire Weather Forecast <span style="font-size:10px; color:var(--text-dim); font-family:'JetBrains Mono',monospace;">(NWS)</span></div>
+    <div class="tl-scroll" id="timeline"></div>
+  </div>
+
+  <div class="bottom-row">
+    <div class="bcard">
+      <div class="stitle" style="margin-bottom:4px;">Ignition Probability</div>
+      <div class="gauge-wrap">
+        <svg viewBox="0 0 190 105">
+          <path d="M 15 95 A 80 80 0 0 1 175 95" fill="none" stroke="#1a1c24" stroke-width="11" stroke-linecap="round"/>
+          <path d="M 15 95 A 80 80 0 0 1 55 26" fill="none" stroke="#36b89a" stroke-width="11" stroke-linecap="round" opacity="0.25"/>
+          <path d="M 55 26 A 80 80 0 0 1 95 15" fill="none" stroke="#e8b430" stroke-width="11" stroke-linecap="round" opacity="0.25"/>
+          <path d="M 95 15 A 80 80 0 0 1 135 26" fill="none" stroke="#e87a30" stroke-width="11" stroke-linecap="round" opacity="0.25"/>
+          <path d="M 135 26 A 80 80 0 0 1 175 95" fill="none" stroke="#dc4444" stroke-width="11" stroke-linecap="round" opacity="0.25"/>
+          <line id="needle" x1="95" y1="95" x2="95" y2="25" stroke="var(--text)" stroke-width="2" stroke-linecap="round" transform="rotate(-90,95,95)"/>
+          <circle cx="95" cy="95" r="4" fill="var(--text)"/>
+        </svg>
+        <div class="gauge-val">
+          <span id="gaugeNum">--</span><span style="font-size:14px;">%</span>
+          <small>PROB. IGNITION</small>
+        </div>
+      </div>
+      <div style="text-align:center; font-size:11px; color:var(--text-dim); font-family:'JetBrains Mono',monospace; margin-top:6px;">
+        Based on live RAWS temp, RH &amp; fuel state
+      </div>
+    </div>
+    <div class="bcard">
+      <div class="stitle" style="margin-bottom:6px;">Fire Weather Indices</div>
+      <table class="idx-tbl">
+        <thead><tr><th>Index</th><th>Value</th><th>Rating</th></tr></thead>
+        <tbody id="idxBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="cfg">
+    <div>
+      Auto-refresh: 15 min · Morning brief: 04:30 PDT ·
+      <a href="https://viewer.synopticdata.com/" target="_blank">Synoptic Viewer</a> ·
+      <a href="https://www.weather.gov/mtr/" target="_blank">NWS Bay Area</a> ·
+      <a href="https://www.marinfire.org/" target="_blank">Marin Fire</a> ·
+      <a href="https://www.parks.ca.gov/?page_id=471" target="_blank">Mt. Tam SP</a>
+    </div>
+    <button class="rbtn" onclick="refresh()">↻ Refresh</button>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════
+   CONFIG
+   ═══════════════════════════════════════════ */
+const SYNOPTIC_TOKEN = '96b8524c1ed7421fb286ea8d9742c5f0';
+const SYNOPTIC_BASE = 'https://api.synopticdata.com/v2/stations';
+
+const STATIONS = [
+  { id:'MDEC1', name:'Middle Peak (Mt. Tam)', elev:"2339'", note:'Exposed ridgeline near summit' },
+  { id:'NBRC1', name:'Big Rock',              elev:"1500'", note:'North Mt. Tam, chaparral' },
+  { id:'WDAC1', name:'Woodacre',              elev:"1400'", note:'San Geronimo Valley, inland' },
+  { id:'BBEC1', name:'Barnaby',               elev:"810'",  note:'West Marin, marine influenced' },
+  { id:'OVYC1', name:'Olema Valley',          elev:"80'",   note:'Deep marine layer zone' },
+  { id:'ACMC1', name:'Mill Valley',           elev:"80'",   note:'Valley floor, WUI zone' },
+  { id:'KTFC1', name:'Kentfield',             elev:"30'",   note:'Ross Valley, sheltered' },
+  { id:'RSAC1', name:'Santa Rosa',            elev:"560'",  note:'North Bay reference' },
+];
+
+const STIDS = STATIONS.map(s => s.id).join(',');
+const LAT = 37.9235;
+const LON = -122.5965;
+const UA = 'MarinFireDash/2.0';
+
+let nwsGrid = null;
+let liveData = {}; // keyed by stid
+
+/* ═══ CLOCK ═══ */
+function tick() {
+  const n = new Date();
+  document.getElementById('clock').textContent = n.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'America/Los_Angeles'});
+  document.getElementById('dateEl').textContent = n.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric',timeZone:'America/Los_Angeles'});
+}
+setInterval(tick,1000); tick();
+
+function showErr(msg) {
+  const el = document.getElementById('errMsg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 15000);
+}
+
+/* ═══════════════════════════════════════════
+   SYNOPTIC API — LIVE RAWS DATA
+   ═══════════════════════════════════════════ */
+async function fetchSynopticLatest() {
+  const url = `${SYNOPTIC_BASE}/latest?stid=${STIDS}`
+    + `&vars=air_temp,relative_humidity,wind_speed,wind_direction,wind_gust,fuel_moisture`
+    + `&units=english`
+    + `&within=180`
+    + `&obtimezone=local`
+    + `&token=${SYNOPTIC_TOKEN}`;
+
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+
+    if (d.SUMMARY?.RESPONSE_CODE !== 1) {
+      console.warn('Synoptic API warning:', d.SUMMARY?.RESPONSE_MESSAGE);
+      showErr(`Synoptic API: ${d.SUMMARY?.RESPONSE_MESSAGE || 'Unknown error'}`);
+      return {};
+    }
+
+    const result = {};
+    for (const st of (d.STATION || [])) {
+      const obs = st.OBSERVATIONS || {};
+      const getVal = (key) => {
+        // Try _value_1 first, then _set_1
+        for (const k of Object.keys(obs)) {
+          if (k.startsWith(key)) return obs[k];
+        }
+        return null;
+      };
+
+      const airTemp = getVal('air_temp');
+      const rh = getVal('relative_humidity');
+      const windSpd = getVal('wind_speed');
+      const windDir = getVal('wind_direction');
+      const windGust = getVal('wind_gust');
+      const fuelMoist = getVal('fuel_moisture');
+
+      result[st.STID] = {
+        name: st.NAME,
+        elevation: st.ELEVATION,
+        lat: parseFloat(st.LATITUDE),
+        lon: parseFloat(st.LONGITUDE),
+        status: st.STATUS,
+        temp: airTemp ? Math.round(airTemp.value) : null,
+        tempRaw: airTemp ? airTemp.value : null,
+        rh: rh ? Math.round(rh.value) : null,
+        rhRaw: rh ? rh.value : null,
+        wind: windSpd ? Math.round(windSpd.value) : null,
+        windRaw: windSpd ? windSpd.value : null,
+        windDir: windDir ? Math.round(windDir.value) : null,
+        windDirCard: windDir ? degToCard(windDir.value) : null,
+        gust: windGust ? Math.round(windGust.value) : null,
+        fuel: fuelMoist ? Math.round(fuelMoist.value) : null,
+        obsTime: airTemp?.date_time || rh?.date_time || windSpd?.date_time || null,
+      };
+    }
+    return result;
+  } catch (e) {
+    console.error('Synoptic fetch error:', e);
+    showErr(`Failed to fetch RAWS data: ${e.message}`);
+    return {};
+  }
+}
+
+function degToCard(deg) {
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(deg / 22.5) % 16];
+}
+
+/* ═══ NWS API ═══ */
+async function resolveGrid() {
+  if (nwsGrid) return nwsGrid;
+  try {
+    const r = await fetch(`https://api.weather.gov/points/${LAT},${LON}`,{headers:{'User-Agent':UA}});
+    const d = await r.json();
+    nwsGrid = { office: d.properties.gridId, x: d.properties.gridX, y: d.properties.gridY };
+  } catch(e) { nwsGrid = { office:'MTR', x:85, y:106 }; }
+  return nwsGrid;
+}
+
+async function fetchHourly() {
+  try {
+    const g = await resolveGrid();
+    const r = await fetch(`https://api.weather.gov/gridpoints/${g.office}/${g.x},${g.y}/forecast/hourly`,{headers:{'User-Agent':UA}});
+    return (await r.json()).properties?.periods || [];
+  } catch(e) { return []; }
+}
+
+async function fetchGridData() {
+  try {
+    const g = await resolveGrid();
+    const r = await fetch(`https://api.weather.gov/gridpoints/${g.office}/${g.x},${g.y}`,{headers:{'User-Agent':UA}});
+    return (await r.json()).properties || {};
+  } catch(e) { return {}; }
+}
+
+async function fetchAlerts() {
+  try {
+    const r = await fetch(`https://api.weather.gov/alerts/active?point=${LAT},${LON}`,{headers:{'User-Agent':UA}});
+    return (await r.json()).features || [];
+  } catch(e) { return []; }
+}
+
+/* ═══ FIRE CALCULATIONS ═══ */
+function calcPOI(t, rh, shade=0) {
+  if(t==null||rh==null) return null;
+  const fdfm = 1.03*Math.exp(0.0215*rh)*Math.exp(-0.0142*t)*(1+0.005*shade);
+  let p;
+  if(fdfm<=1)p=100; else if(fdfm<=3)p=100-(fdfm-1)*15; else if(fdfm<=5)p=70-(fdfm-3)*12;
+  else if(fdfm<=8)p=46-(fdfm-5)*6; else if(fdfm<=12)p=28-(fdfm-8)*4;
+  else if(fdfm<=16)p=12-(fdfm-12)*2; else if(fdfm<=25)p=4-(fdfm-16)*0.3; else p=1;
+  return Math.max(0,Math.min(100,Math.round(p)));
+}
+
+function sevIdx(w,rh,t) {
+  if(w==null||rh==null||t==null) return null;
+  return Math.max(0,Math.round(Math.max(-20,w)+Math.max(-20,0.75*(50-rh))+Math.max(-20,0.50*(t-70))));
+}
+
+function hainesIdx(t) {
+  if(t==null) return null;
+  const dp=t-15; const s=t>80?3:t>65?2:1; const m=(t-dp)>15?3:(t-dp)>8?2:1; return s+m;
+}
+
+function rating(v,th,lb) { for(let i=0;i<th.length;i++) if(v<=th[i]) return lb[i]; return lb[lb.length-1]; }
+function rc(r) { return {'Low':'c-low','Moderate':'c-mod','High':'c-elev','Very High':'c-crit','Extreme':'c-crit'}[r]||''; }
+
+function getRH(grid) {
+  if(!grid.relativeHumidity?.values?.length) return null;
+  const now = new Date();
+  for(const v of grid.relativeHumidity.values) { if(new Date(v.validTime.split('/')[0])>=now) return v.value; }
+  return grid.relativeHumidity.values[0]?.value||null;
+}
+
+/* ═══ RENDER — uses LIVE data as primary, NWS as fallback ═══ */
+function renderMetrics(grid, hourly) {
+  // Aggregate live station data for "representative" current conditions
+  // Use Middle Peak (MDEC1) as primary, average others
+  const vals = Object.values(liveData).filter(d => d.temp != null);
+  const rhVals = Object.values(liveData).filter(d => d.rh != null);
+  const windVals = Object.values(liveData).filter(d => d.wind != null);
+
+  // Primary station: Middle Peak or first available
+  const primary = liveData['MDEC1'] || liveData['NBRC1'] || liveData['WDAC1'] || vals[0] || {};
+
+  // Use average of all stations for overview
+  const avgTemp = vals.length ? Math.round(vals.reduce((s,d)=>s+d.temp,0)/vals.length) : (hourly[0]?.temperature || '--');
+  const avgRH = rhVals.length ? Math.round(rhVals.reduce((s,d)=>s+d.rh,0)/rhVals.length) : (getRH(grid) ? Math.round(getRH(grid)) : '--');
+  const maxWind = windVals.length ? Math.max(...windVals.map(d=>d.wind)) : (parseInt(hourly[0]?.windSpeed)||'--');
+  const maxGust = windVals.length ? Math.max(...windVals.filter(d=>d.gust).map(d=>d.gust)) : null;
+
+  // Hi/Lo from all stations
+  const hiTemp = vals.length ? Math.max(...vals.map(d=>d.temp)) : '--';
+  const loTemp = vals.length ? Math.min(...vals.map(d=>d.temp)) : '--';
+
+  document.getElementById('mTemp').innerHTML = `${avgTemp}<span class="mc-unit">°F</span>`;
+  document.getElementById('mTempN').textContent = `Range: ${loTemp}° – ${hiTemp}° across stations`;
+
+  const rhNum = typeof avgRH === 'number' ? avgRH : 0;
+  document.getElementById('mRH').innerHTML = `${avgRH}<span class="mc-unit">%</span>`;
+  const bar = document.getElementById('mRHBar');
+  bar.style.width = `${rhNum}%`;
+  bar.style.background = rhNum<15?'var(--red)':rhNum<25?'var(--orange)':rhNum<40?'var(--amber)':'var(--blue)';
+  const loRH = rhVals.length ? Math.min(...rhVals.map(d=>d.rh)) : null;
+  document.getElementById('mRHN').textContent =
+    rhNum<15 ? `CRITICAL — Red Flag territory${loRH!=null?' · Min: '+loRH+'%':''}` :
+    rhNum<25 ? `LOW — Elevated fire risk${loRH!=null?' · Min: '+loRH+'%':''}` :
+    rhNum<40 ? `MODERATE — Monitor${loRH!=null?' · Min: '+loRH+'%':''}` :
+    `ADEQUATE${loRH!=null?' · Min: '+loRH+'%':''}`;
+
+  const poi = calcPOI(typeof avgTemp==='number'?avgTemp:null, typeof avgRH==='number'?avgRH:null);
+  document.getElementById('mPOI').innerHTML = `${poi??'--'}<span class="mc-unit">%</span>`;
+  document.getElementById('mPOIN').textContent = poi>60?'EXTREME — Ignition very likely':poi>40?'HIGH — Caution advised':poi>20?'MODERATE':'LOW';
+
+  const windDir = primary.windDirCard || (hourly[0]?.windDirection) || '--';
+  document.getElementById('mWind').innerHTML = `${maxWind}<span class="mc-unit">mph</span>`;
+  document.getElementById('mWindN').textContent = `${windDir}${maxGust?' / Gusts '+maxGust:''}`;
+
+  // Gauge
+  if(poi!=null) {
+    document.getElementById('gaugeNum').textContent = poi;
+    document.getElementById('needle').setAttribute('transform',`rotate(${-90+(poi/100)*180},95,95)`);
+  }
+
+  setThreat(avgTemp, avgRH, maxWind, poi);
+  renderIndices(typeof avgTemp==='number'?avgTemp:null, typeof avgRH==='number'?avgRH:null, typeof maxWind==='number'?maxWind:null);
+}
+
+function setThreat(t,rh,w,poi) {
+  const el = document.getElementById('threat');
+  let lvl,cls,dtl;
+  const rhn = typeof rh==='number'?rh:100;
+  const wn = typeof w==='number'?w:0;
+  if(poi>60||rhn<12||(wn>25&&rhn<20)) { lvl='CRITICAL';cls='crit';dtl='Extreme fire weather. Red Flag criteria likely met. Avoid all ignition sources.'; }
+  else if(poi>35||rhn<20||(wn>15&&rhn<30)) { lvl='ELEVATED';cls='elev';dtl='Elevated fire danger on Mt. Tam and surrounding wildlands.'; }
+  else if(poi>15||rhn<35) { lvl='MODERATE';cls='mod';dtl='Moderate fire weather. Standard precautions in grassland and chaparral.'; }
+  else { lvl='LOW';cls='low';dtl='Low fire threat. Marine layer and humidity suppressing fire risk.'; }
+  el.className=`threat ${cls}`;
+  document.getElementById('threatLvl').innerHTML=`● ${lvl}`;
+  document.getElementById('threatDtl').textContent=dtl;
+}
+
+function renderIndices(t,rh,w) {
+  const si=sevIdx(w,rh,t); const ha=hainesIdx(t);
+  const f1 = t!=null&&rh!=null ? Math.round(1.03*Math.exp(0.0215*rh)*Math.exp(-0.0142*t)) : '--';
+  const f10 = f1!=='--' ? Math.round(f1*1.6) : '--';
+  const bi=si!=null?Math.round(si*0.8):'--'; const sc=si!=null?Math.round(si*1.2):'--'; const erc=si!=null?Math.round(si*0.6+10):'--';
+  // Check for live fuel moisture from stations
+  const fuelVals = Object.values(liveData).filter(d=>d.fuel!=null);
+  const avgFuel = fuelVals.length ? Math.round(fuelVals.reduce((s,d)=>s+d.fuel,0)/fuelVals.length) : null;
+
+  const rows = [
+    {n:'Burning Index',v:bi,t:[20,40,70],l:['Low','Moderate','High','Very High']},
+    {n:'Spread Component',v:sc,t:[15,35,60],l:['Low','Moderate','High','Very High']},
+    {n:'Energy Release',v:erc,t:[25,45,65],l:['Low','Moderate','High','Very High']},
+    {n:'1-hr Fuel Moisture',v:f1!=='--'?f1+'%':'--',t:[5,10,15],l:['Very High','High','Moderate','Low']},
+    {n:'10-hr Fuel Moisture',v:avgFuel!=null?avgFuel+'% (live)':f10!=='--'?f10+'%':'--',t:[8,15,20],l:['Very High','High','Moderate','Low']},
+    {n:'Haines Index',v:ha,t:[3,4,5],l:['Low','Moderate','High','Very High']},
+    {n:'Severity Index',v:si,t:[15,30,50],l:['Low','Moderate','High','Extreme']},
+  ];
+  document.getElementById('idxBody').innerHTML = rows.map(r=>{
+    const nv=parseInt(r.v); let rt='--';
+    if(!isNaN(nv)) rt=rating(nv,r.t,r.l);
+    return `<tr><td>${r.n}</td><td style="font-weight:600;font-family:'JetBrains Mono',monospace;">${r.v}</td><td class="${rc(rt)}" style="font-weight:600;">${rt}</td></tr>`;
+  }).join('');
+}
+
+function renderStations() {
+  document.getElementById('rawsGrid').innerHTML = STATIONS.map(s => {
+    const d = liveData[s.id];
+    if (!d) {
+      return `<div class="raws-card offline">
+        <div class="raws-hdr"><span class="raws-name"><span class="sdot off"></span>${s.name}</span><span class="raws-id">${s.id}</span></div>
+        <div class="raws-sub">Elev ${s.elev} · ${s.note} · No data</div>
+        <div style="font-size:11px; color:var(--text-dim); padding:8px 0;">Station not reporting or not found in Synoptic</div>
+      </div>`;
+    }
+
+    // Determine freshness
+    let freshClass = '';
+    let statusDot = 'on';
+    if (d.obsTime) {
+      const obsDate = new Date(d.obsTime);
+      const ageMin = (Date.now() - obsDate.getTime()) / 60000;
+      if (ageMin > 120) { freshClass = 'offline'; statusDot = 'off'; }
+      else if (ageMin > 60) { freshClass = 'stale'; statusDot = 'stale'; }
+    }
+    if (d.status === 'INACTIVE') { freshClass = 'offline'; statusDot = 'off'; }
+
+    const obsStr = d.obsTime ? new Date(d.obsTime).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'America/Los_Angeles'}) : '--';
+    const tc = d.temp!=null ? (d.temp>90?'var(--red)':d.temp>80?'var(--orange)':d.temp>70?'var(--amber)':'var(--green)') : 'var(--text-dim)';
+    const rhc = d.rh!=null ? (d.rh<15?'var(--red)':d.rh<25?'var(--orange)':d.rh<40?'var(--amber)':'var(--blue)') : 'var(--text-dim)';
+    const fc = d.fuel!=null ? (d.fuel<5?'var(--red)':d.fuel<10?'var(--orange)':'var(--green)') : 'var(--text-dim)';
+
+    return `<div class="raws-card ${freshClass}">
+      <div class="raws-hdr"><span class="raws-name"><span class="sdot ${statusDot}"></span>${s.name}</span><span class="raws-id">${s.id}</span></div>
+      <div class="raws-sub">Elev ${d.elevation||s.elev}' · ${s.note} · Obs: ${obsStr}</div>
+      <div class="raws-row">
+        <div class="raws-m"><div class="rl">Temp</div><div class="rv" style="color:${tc}">${d.temp!=null?d.temp+'°':'--'}</div></div>
+        <div class="raws-m"><div class="rl">RH</div><div class="rv" style="color:${rhc}">${d.rh!=null?d.rh+'%':'--'}</div></div>
+        <div class="raws-m"><div class="rl">Wind</div><div class="rv">${d.wind!=null?d.wind:'--'}<small>mph</small></div></div>
+        <div class="raws-m"><div class="rl">Dir</div><div class="rv">${d.windDirCard||'--'}</div></div>
+        <div class="raws-m"><div class="rl">Fuel</div><div class="rv" style="color:${fc}">${d.fuel!=null?d.fuel+'%':'--'}</div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderTimeline(hourly, grid) {
+  const periods = hourly.slice(0,24);
+  const rhVals = grid.relativeHumidity?.values||[];
+  document.getElementById('timeline').innerHTML = periods.map((p,i) => {
+    const dt = new Date(p.startTime);
+    const hr = dt.toLocaleTimeString('en-US',{hour:'numeric',hour12:true,timeZone:'America/Los_Angeles'});
+    let rh = '--';
+    for(const rv of rhVals) { if(Math.abs(new Date(rv.validTime.split('/')[0])-dt)<3600000){rh=Math.round(rv.value);break;} }
+    const w = parseInt(p.windSpeed)||0;
+    const poi = calcPOI(p.temperature, typeof rh==='number'?rh:45);
+    const pc = poi>40?'var(--red)':poi>20?'var(--orange)':'var(--green)';
+    return `<div class="tl-slot ${i===0?'now':''}">
+      <div class="tl-hr">${i===0?'NOW':hr}</div>
+      <div class="tl-tmp">${p.temperature}°</div>
+      <div class="tl-rh">RH ${rh}%</div>
+      <div class="tl-wind">${p.windDirection} ${w}</div>
+      <div class="tl-poi" style="color:${pc}">POI ${poi!=null?poi+'%':'--'}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ═══ MAIN REFRESH ═══ */
+async function refresh() {
+  try {
+    // Fetch live RAWS and NWS in parallel
+    const [synoptic, hourly, grid, alerts] = await Promise.all([
+      fetchSynopticLatest(),
+      fetchHourly(),
+      fetchGridData(),
+      fetchAlerts(),
+    ]);
+
+    liveData = synoptic;
+    const stCount = Object.keys(liveData).length;
+    console.log(`Synoptic: ${stCount} stations reporting`);
+
+    renderMetrics(grid, hourly);
+    renderStations();
+    if (hourly.length) renderTimeline(hourly, grid);
+
+    // Fire weather alerts
+    const fa = alerts.filter(a =>
+      a.properties?.event?.toLowerCase().includes('fire') ||
+      a.properties?.event?.toLowerCase().includes('red flag')
+    );
+    if (fa.length) {
+      document.getElementById('threat').className = 'threat crit';
+      document.getElementById('threatLvl').innerHTML = '⚠ RED FLAG WARNING';
+      document.getElementById('threatDtl').textContent = fa[0].properties.headline || 'Active fire weather alert';
+    }
+
+    document.getElementById('lastUpd').textContent =
+      `Updated ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'America/Los_Angeles'})} · ${stCount} stations`;
+  } catch(e) {
+    console.error('Refresh error:', e);
+    showErr('Dashboard refresh failed: ' + e.message);
+  }
+  document.getElementById('loader').classList.add('gone');
+}
+
+refresh();
+setInterval(refresh, 15 * 60 * 1000);
+
+// 4:30 AM morning brief
+setInterval(() => {
+  const n = new Date();
+  const pst = new Date(n.toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));
+  if (pst.getHours()===4 && pst.getMinutes()>=28 && pst.getMinutes()<=32) refresh();
+}, 60000);
+</script>
+
+</body>
+</html>
