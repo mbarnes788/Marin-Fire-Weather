@@ -413,14 +413,36 @@ async function fetchAlerts() {
 }
 
 /* ═══ FIRE CALCULATIONS ═══ */
+
+// Precipitation state — set during data fetch
+let recentPrecip = false; // true if precip in last few hours
+
 function calcPOI(t, rh, shade=0) {
   if(t==null||rh==null) return null;
-  const fdfm = 1.03*Math.exp(0.0215*rh)*Math.exp(-0.0142*t)*(1+0.005*shade);
+
+  // If RH >= 80% or rain is falling, ignition probability is effectively zero
+  if(rh >= 80) return 0;
+  if(recentPrecip && rh >= 60) return 0;
+
+  // NFDRS Fine Dead Fuel Moisture approximation
+  // At high RH the exponential term drives FDFM up, suppressing POI
+  const fdfm = 1.03 * Math.exp(0.0215 * rh) * Math.exp(-0.0142 * t) * (1 + 0.005 * shade);
+
   let p;
-  if(fdfm<=1)p=100; else if(fdfm<=3)p=100-(fdfm-1)*15; else if(fdfm<=5)p=70-(fdfm-3)*12;
-  else if(fdfm<=8)p=46-(fdfm-5)*6; else if(fdfm<=12)p=28-(fdfm-8)*4;
-  else if(fdfm<=16)p=12-(fdfm-12)*2; else if(fdfm<=25)p=4-(fdfm-16)*0.3; else p=1;
-  return Math.max(0,Math.min(100,Math.round(p)));
+  if(fdfm <= 1) p = 100;
+  else if(fdfm <= 3) p = 100 - (fdfm - 1) * 15;
+  else if(fdfm <= 5) p = 70 - (fdfm - 3) * 12;
+  else if(fdfm <= 8) p = 46 - (fdfm - 5) * 6;
+  else if(fdfm <= 12) p = 28 - (fdfm - 8) * 4;
+  else if(fdfm <= 16) p = 12 - (fdfm - 12) * 2;
+  else if(fdfm <= 25) p = 4 - (fdfm - 16) * 0.3;
+  else p = 0;
+
+  // Additional suppression: high RH floors
+  if(rh >= 60) p = Math.min(p, 10);
+  else if(rh >= 50) p = Math.min(p, 25);
+
+  return Math.max(0, Math.min(100, Math.round(p)));
 }
 
 function sevIdx(w,rh,t) {
@@ -446,7 +468,6 @@ function getRH(grid) {
 /* ═══ RENDER — uses LIVE data as primary, NWS as fallback ═══ */
 function renderMetrics(grid, hourly) {
   // Aggregate live station data for "representative" current conditions
-  // Use Middle Peak (MDEC1) as primary, average others
   const vals = Object.values(liveData).filter(d => d.temp != null);
   const rhVals = Object.values(liveData).filter(d => d.rh != null);
   const windVals = Object.values(liveData).filter(d => d.wind != null);
@@ -455,33 +476,73 @@ function renderMetrics(grid, hourly) {
   const primary = liveData['MDEC1'] || liveData['NBRC1'] || liveData['WDAC1'] || vals[0] || {};
 
   // Use average of all stations for overview
-  const avgTemp = vals.length ? Math.round(vals.reduce((s,d)=>s+d.temp,0)/vals.length) : (hourly[0]?.temperature || '--');
-  const avgRH = rhVals.length ? Math.round(rhVals.reduce((s,d)=>s+d.rh,0)/rhVals.length) : (getRH(grid) ? Math.round(getRH(grid)) : '--');
+  const avgTemp = vals.length ? Math.round(vals.reduce((s,d)=>s+d.temp,0)/vals.length) : (hourly[0]?.temperature ?? '--');
   const maxWind = windVals.length ? Math.max(...windVals.map(d=>d.wind)) : (parseInt(hourly[0]?.windSpeed)||'--');
-  const maxGust = windVals.length ? Math.max(...windVals.filter(d=>d.gust).map(d=>d.gust)) : null;
+  const maxGust = windVals.length ? Math.max(...windVals.filter(d=>d.gust!=null).map(d=>d.gust)) : null;
+
+  // RH: use live RAWS first, then NWS grid, never default to 0
+  let avgRH;
+  if (rhVals.length) {
+    avgRH = Math.round(rhVals.reduce((s,d)=>s+d.rh,0)/rhVals.length);
+  } else {
+    const nwsRH = getRH(grid);
+    avgRH = nwsRH != null ? Math.round(nwsRH) : null;
+  }
+
+  // Check NWS forecast for precipitation keywords
+  const curForecast = hourly[0]?.shortForecast || hourly[0]?.detailedForecast || '';
+  const precipKeywords = /rain|shower|drizzle|storm|precip|thunderstorm|snow|sleet|hail/i;
+  if (precipKeywords.test(curForecast)) {
+    recentPrecip = true;
+  }
+
+  // Also check NWS probability of precipitation from grid data
+  if (grid.probabilityOfPrecipitation?.values?.length) {
+    const now = new Date();
+    for (const v of grid.probabilityOfPrecipitation.values) {
+      const vt = new Date(v.validTime.split('/')[0]);
+      if (vt >= now && v.value >= 50) { recentPrecip = true; break; }
+      if (vt >= now) break;
+    }
+  }
 
   // Hi/Lo from all stations
   const hiTemp = vals.length ? Math.max(...vals.map(d=>d.temp)) : '--';
   const loTemp = vals.length ? Math.min(...vals.map(d=>d.temp)) : '--';
 
-  document.getElementById('mTemp').innerHTML = `${avgTemp}<span class="mc-unit">°F</span>`;
-  document.getElementById('mTempN').textContent = `Range: ${loTemp}° – ${hiTemp}° across stations`;
+  document.getElementById('mTemp').innerHTML = `${avgTemp ?? '--'}<span class="mc-unit">°F</span>`;
+  document.getElementById('mTempN').textContent = vals.length
+    ? `Range: ${loTemp}° – ${hiTemp}° across ${vals.length} stations`
+    : `NWS forecast: ${hourly[0]?.temperature ?? '--'}°F`;
 
-  const rhNum = typeof avgRH === 'number' ? avgRH : 0;
-  document.getElementById('mRH').innerHTML = `${avgRH}<span class="mc-unit">%</span>`;
+  // RH display — safe handling when null
+  const rhDisplay = avgRH != null ? avgRH : '--';
+  const rhNum = avgRH != null ? avgRH : null;
+  document.getElementById('mRH').innerHTML = `${rhDisplay}<span class="mc-unit">%</span>`;
   const bar = document.getElementById('mRHBar');
-  bar.style.width = `${rhNum}%`;
-  bar.style.background = rhNum<15?'var(--red)':rhNum<25?'var(--orange)':rhNum<40?'var(--amber)':'var(--blue)';
+  bar.style.width = rhNum != null ? `${rhNum}%` : '0%';
+  bar.style.background = rhNum == null ? 'var(--surface3)' : rhNum<15?'var(--red)':rhNum<25?'var(--orange)':rhNum<40?'var(--amber)':'var(--blue)';
   const loRH = rhVals.length ? Math.min(...rhVals.map(d=>d.rh)) : null;
-  document.getElementById('mRHN').textContent =
-    rhNum<15 ? `CRITICAL — Red Flag territory${loRH!=null?' · Min: '+loRH+'%':''}` :
-    rhNum<25 ? `LOW — Elevated fire risk${loRH!=null?' · Min: '+loRH+'%':''}` :
-    rhNum<40 ? `MODERATE — Monitor${loRH!=null?' · Min: '+loRH+'%':''}` :
-    `ADEQUATE${loRH!=null?' · Min: '+loRH+'%':''}`;
 
-  const poi = calcPOI(typeof avgTemp==='number'?avgTemp:null, typeof avgRH==='number'?avgRH:null);
+  let rhLabel;
+  if (rhNum == null) rhLabel = 'No RH data available';
+  else if (recentPrecip) rhLabel = `RAIN — Fire risk suppressed${loRH!=null?' · RH: '+loRH+'%–'+Math.max(...rhVals.map(d=>d.rh))+'%':''}`;
+  else if (rhNum >= 80) rhLabel = `HIGH — Very moist conditions${loRH!=null?' · Min: '+loRH+'%':''}`;
+  else if (rhNum >= 50) rhLabel = `ADEQUATE — Normal range${loRH!=null?' · Min: '+loRH+'%':''}`;
+  else if (rhNum >= 35) rhLabel = `MODERATE — Monitor${loRH!=null?' · Min: '+loRH+'%':''}`;
+  else if (rhNum >= 25) rhLabel = `LOW — Elevated fire risk${loRH!=null?' · Min: '+loRH+'%':''}`;
+  else if (rhNum >= 15) rhLabel = `VERY LOW — High fire risk${loRH!=null?' · Min: '+loRH+'%':''}`;
+  else rhLabel = `CRITICAL — Red Flag territory${loRH!=null?' · Min: '+loRH+'%':''}`;
+  document.getElementById('mRHN').textContent = rhLabel;
+
+  const poi = calcPOI(typeof avgTemp==='number'?avgTemp:null, rhNum);
   document.getElementById('mPOI').innerHTML = `${poi??'--'}<span class="mc-unit">%</span>`;
-  document.getElementById('mPOIN').textContent = poi>60?'EXTREME — Ignition very likely':poi>40?'HIGH — Caution advised':poi>20?'MODERATE':'LOW';
+  document.getElementById('mPOIN').textContent =
+    recentPrecip ? 'SUPPRESSED — Precipitation detected' :
+    poi==null ? '--' :
+    poi>60 ? 'EXTREME — Ignition very likely' :
+    poi>40 ? 'HIGH — Caution advised' :
+    poi>20 ? 'MODERATE' : 'LOW';
 
   const windDir = primary.windDirCard || (hourly[0]?.windDirection) || '--';
   document.getElementById('mWind').innerHTML = `${maxWind}<span class="mc-unit">mph</span>`;
@@ -491,24 +552,56 @@ function renderMetrics(grid, hourly) {
   if(poi!=null) {
     document.getElementById('gaugeNum').textContent = poi;
     document.getElementById('needle').setAttribute('transform',`rotate(${-90+(poi/100)*180},95,95)`);
+  } else {
+    document.getElementById('gaugeNum').textContent = '--';
+    document.getElementById('needle').setAttribute('transform','rotate(-90,95,95)');
   }
 
-  setThreat(avgTemp, avgRH, maxWind, poi);
-  renderIndices(typeof avgTemp==='number'?avgTemp:null, typeof avgRH==='number'?avgRH:null, typeof maxWind==='number'?maxWind:null);
+  setThreat(avgTemp, avgRH, maxWind, poi, curForecast);
+  renderIndices(typeof avgTemp==='number'?avgTemp:null, rhNum, typeof maxWind==='number'?maxWind:null);
 }
 
-function setThreat(t,rh,w,poi) {
+function setThreat(t, rh, w, poi, forecastStr) {
   const el = document.getElementById('threat');
-  let lvl,cls,dtl;
-  const rhn = typeof rh==='number'?rh:100;
-  const wn = typeof w==='number'?w:0;
-  if(poi>60||rhn<12||(wn>25&&rhn<20)) { lvl='CRITICAL';cls='crit';dtl='Extreme fire weather. Red Flag criteria likely met. Avoid all ignition sources.'; }
-  else if(poi>35||rhn<20||(wn>15&&rhn<30)) { lvl='ELEVATED';cls='elev';dtl='Elevated fire danger on Mt. Tam and surrounding wildlands.'; }
-  else if(poi>15||rhn<35) { lvl='MODERATE';cls='mod';dtl='Moderate fire weather. Standard precautions in grassland and chaparral.'; }
-  else { lvl='LOW';cls='low';dtl='Low fire threat. Marine layer and humidity suppressing fire risk.'; }
-  el.className=`threat ${cls}`;
-  document.getElementById('threatLvl').innerHTML=`● ${lvl}`;
-  document.getElementById('threatDtl').textContent=dtl;
+  let lvl, cls, dtl;
+  const rhn = typeof rh === 'number' ? rh : null;
+  const wn = typeof w === 'number' ? w : 0;
+  const pn = typeof poi === 'number' ? poi : 0;
+
+  // Check for rain/wet conditions first — these override fire danger
+  const isRaining = recentPrecip || (forecastStr && /rain|shower|drizzle|storm|precip/i.test(forecastStr));
+  const isWet = rhn != null && rhn >= 70;
+
+  if (isRaining || isWet) {
+    // Wet/rainy conditions — fire risk is suppressed
+    if (isRaining) {
+      lvl = 'LOW'; cls = 'low';
+      dtl = 'Precipitation detected. Fire risk suppressed by wet conditions.';
+    } else {
+      lvl = 'LOW'; cls = 'low';
+      dtl = `High humidity (${rhn}%). Fire risk suppressed by moisture.`;
+    }
+  } else if (rhn == null) {
+    // No RH data — can't determine threat, default to moderate caution
+    lvl = 'MODERATE'; cls = 'mod';
+    dtl = 'Limited sensor data. Unable to fully assess fire weather — use caution.';
+  } else if (pn > 60 || rhn < 12 || (wn > 25 && rhn < 20)) {
+    lvl = 'CRITICAL'; cls = 'crit';
+    dtl = 'Extreme fire weather. Red Flag criteria likely met. Avoid all ignition sources.';
+  } else if (pn > 35 || rhn < 20 || (wn > 15 && rhn < 30)) {
+    lvl = 'ELEVATED'; cls = 'elev';
+    dtl = 'Elevated fire danger on Mt. Tam and surrounding wildlands.';
+  } else if (pn > 15 || rhn < 35) {
+    lvl = 'MODERATE'; cls = 'mod';
+    dtl = 'Moderate fire weather. Standard precautions in grassland and chaparral.';
+  } else {
+    lvl = 'LOW'; cls = 'low';
+    dtl = 'Low fire threat. Marine layer and humidity suppressing fire risk.';
+  }
+
+  el.className = `threat ${cls}`;
+  document.getElementById('threatLvl').innerHTML = `● ${lvl}`;
+  document.getElementById('threatDtl').textContent = dtl;
 }
 
 function renderIndices(t,rh,w) {
@@ -586,11 +679,24 @@ function renderTimeline(hourly, grid) {
     let rh = '--';
     for(const rv of rhVals) { if(Math.abs(new Date(rv.validTime.split('/')[0])-dt)<3600000){rh=Math.round(rv.value);break;} }
     const w = parseInt(p.windSpeed)||0;
-    const poi = calcPOI(p.temperature, typeof rh==='number'?rh:45);
-    const pc = poi>40?'var(--red)':poi>20?'var(--orange)':'var(--green)';
+
+    // Check if this period has rain in the forecast
+    const periodRain = /rain|shower|drizzle|storm|precip/i.test(p.shortForecast || '');
+    const rhForCalc = typeof rh === 'number' ? rh : null;
+
+    let poi;
+    if (periodRain) {
+      poi = 0; // Rain suppresses ignition
+    } else {
+      poi = calcPOI(p.temperature, rhForCalc);
+    }
+
+    const pc = poi==null?'var(--text-dim)':poi>40?'var(--red)':poi>20?'var(--orange)':'var(--green)';
+    const rainIcon = periodRain ? '🌧 ' : '';
+
     return `<div class="tl-slot ${i===0?'now':''}">
       <div class="tl-hr">${i===0?'NOW':hr}</div>
-      <div class="tl-tmp">${p.temperature}°</div>
+      <div class="tl-tmp">${rainIcon}${p.temperature}°</div>
       <div class="tl-rh">RH ${rh}%</div>
       <div class="tl-wind">${p.windDirection} ${w}</div>
       <div class="tl-poi" style="color:${pc}">POI ${poi!=null?poi+'%':'--'}</div>
@@ -601,6 +707,9 @@ function renderTimeline(hourly, grid) {
 /* ═══ MAIN REFRESH ═══ */
 async function refresh() {
   try {
+    // Reset precipitation flag each cycle
+    recentPrecip = false;
+
     // Fetch live RAWS and NWS in parallel
     const [synoptic, hourly, grid, alerts] = await Promise.all([
       fetchSynopticLatest(),
@@ -611,13 +720,18 @@ async function refresh() {
 
     liveData = synoptic;
     const stCount = Object.keys(liveData).length;
-    console.log(`Synoptic: ${stCount} stations reporting`);
+
+    // Debug: log what we're getting
+    const rhStations = Object.values(liveData).filter(d => d.rh != null);
+    console.log(`Synoptic: ${stCount} stations, ${rhStations.length} reporting RH`);
+    rhStations.forEach(d => console.log(`  ${d.name}: temp=${d.temp}°F rh=${d.rh}% wind=${d.wind}mph`));
+    if (hourly[0]) console.log(`NWS forecast: ${hourly[0].temperature}°F, ${hourly[0].shortForecast}`);
 
     renderMetrics(grid, hourly);
     renderStations();
     if (hourly.length) renderTimeline(hourly, grid);
 
-    // Fire weather alerts
+    // Fire weather alerts — only override if an actual NWS red flag is active
     const fa = alerts.filter(a =>
       a.properties?.event?.toLowerCase().includes('fire') ||
       a.properties?.event?.toLowerCase().includes('red flag')
@@ -628,8 +742,9 @@ async function refresh() {
       document.getElementById('threatDtl').textContent = fa[0].properties.headline || 'Active fire weather alert';
     }
 
+    const precipTag = recentPrecip ? ' · 🌧 Rain' : '';
     document.getElementById('lastUpd').textContent =
-      `Updated ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'America/Los_Angeles'})} · ${stCount} stations`;
+      `Updated ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true,timeZone:'America/Los_Angeles'})} · ${stCount} stn${precipTag}`;
   } catch(e) {
     console.error('Refresh error:', e);
     showErr('Dashboard refresh failed: ' + e.message);
