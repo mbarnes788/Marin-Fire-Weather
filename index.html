@@ -567,36 +567,63 @@ function setThreat(t, rh, w, poi, forecastStr) {
   const rhn = typeof rh === 'number' ? rh : null;
   const wn = typeof w === 'number' ? w : 0;
   const pn = typeof poi === 'number' ? poi : 0;
+  const tn = typeof t === 'number' ? t : null;
 
   // Check for rain/wet conditions first — these override fire danger
   const isRaining = recentPrecip || (forecastStr && /rain|shower|drizzle|storm|precip/i.test(forecastStr));
   const isWet = rhn != null && rhn >= 70;
+  const isFoggy = forecastStr && /fog|mist|overcast/i.test(forecastStr);
 
-  if (isRaining || isWet) {
-    // Wet/rainy conditions — fire risk is suppressed
-    if (isRaining) {
-      lvl = 'LOW'; cls = 'low';
-      dtl = 'Precipitation detected. Fire risk suppressed by wet conditions.';
+  if (isRaining) {
+    lvl = 'LOW'; cls = 'low';
+    dtl = 'Precipitation detected. Fire risk suppressed by wet conditions.';
+  } else if (isWet) {
+    lvl = 'LOW'; cls = 'low';
+    dtl = `High humidity (${rhn}%). Fire risk suppressed by moisture.`;
+  } else if (isFoggy && (rhn == null || rhn >= 50)) {
+    lvl = 'LOW'; cls = 'low';
+    dtl = 'Fog/overcast. Marine layer keeping fire risk low.';
+  } else if (rhn == null) {
+    // No RH data — look at NWS forecast text for clues
+    if (forecastStr && /sunny|hot|dry|clear/i.test(forecastStr) && tn != null && tn > 85) {
+      lvl = 'MODERATE'; cls = 'mod';
+      dtl = 'Limited RAWS data but hot/dry forecast — monitor conditions.';
     } else {
       lvl = 'LOW'; cls = 'low';
-      dtl = `High humidity (${rhn}%). Fire risk suppressed by moisture.`;
+      dtl = 'Limited sensor data. NWS forecast does not indicate elevated fire weather.';
     }
-  } else if (rhn == null) {
-    // No RH data — can't determine threat, default to moderate caution
-    lvl = 'MODERATE'; cls = 'mod';
-    dtl = 'Limited sensor data. Unable to fully assess fire weather — use caution.';
-  } else if (pn > 60 || rhn < 12 || (wn > 25 && rhn < 20)) {
-    lvl = 'CRITICAL'; cls = 'crit';
-    dtl = 'Extreme fire weather. Red Flag criteria likely met. Avoid all ignition sources.';
-  } else if (pn > 35 || rhn < 20 || (wn > 15 && rhn < 30)) {
-    lvl = 'ELEVATED'; cls = 'elev';
-    dtl = 'Elevated fire danger on Mt. Tam and surrounding wildlands.';
-  } else if (pn > 15 || rhn < 35) {
-    lvl = 'MODERATE'; cls = 'mod';
-    dtl = 'Moderate fire weather. Standard precautions in grassland and chaparral.';
   } else {
-    lvl = 'LOW'; cls = 'low';
-    dtl = 'Low fire threat. Marine layer and humidity suppressing fire risk.';
+    // We have real RH data — use multi-factor assessment
+    // CRITICAL requires: very low RH AND (high wind OR high temp OR high POI)
+    // Per Marin FDOP: dispatch level driven by BI from FEMS, which reflects combined conditions
+    const isCritical = (rhn < 12 && wn > 20) ||
+                       (rhn < 15 && wn > 25 && tn > 85) ||
+                       (pn > 60 && rhn < 20);
+
+    const isElevated = (rhn < 15 && wn > 10) ||
+                       (rhn < 20 && wn > 20) ||
+                       (rhn < 20 && tn > 90) ||
+                       (pn > 40 && rhn < 25);
+
+    const isModerate = (rhn < 25 && wn > 10) ||
+                       (rhn < 25 && tn > 85) ||
+                       (pn > 20);
+
+    if (isCritical) {
+      lvl = 'CRITICAL'; cls = 'crit';
+      dtl = `Extreme fire weather — RH ${rhn}%, wind ${wn}mph. Red Flag criteria likely met.`;
+    } else if (isElevated) {
+      lvl = 'ELEVATED'; cls = 'elev';
+      dtl = `Elevated fire danger — RH ${rhn}%, wind ${wn}mph. Monitor Mt. Tam and grasslands.`;
+    } else if (isModerate) {
+      lvl = 'MODERATE'; cls = 'mod';
+      dtl = `Moderate fire weather — RH ${rhn}%. Standard precautions for chaparral and grassland.`;
+    } else {
+      lvl = 'LOW'; cls = 'low';
+      dtl = rhn >= 50
+        ? 'Low fire threat. Good humidity and marine influence.'
+        : `Low fire threat. RH ${rhn}% — conditions manageable.`;
+    }
   }
 
   el.className = `threat ${cls}`;
@@ -608,15 +635,16 @@ function renderIndices(t,rh,w) {
   const si=sevIdx(w,rh,t); const ha=hainesIdx(t);
   const f1 = t!=null&&rh!=null ? Math.round(1.03*Math.exp(0.0215*rh)*Math.exp(-0.0142*t)) : '--';
   const f10 = f1!=='--' ? Math.round(f1*1.6) : '--';
+  // BI/SC/ERC are rough estimates — real values come from FEMS per Marin FDOP
   const bi=si!=null?Math.round(si*0.8):'--'; const sc=si!=null?Math.round(si*1.2):'--'; const erc=si!=null?Math.round(si*0.6+10):'--';
-  // Check for live fuel moisture from stations
+  // Live fuel moisture from RAWS
   const fuelVals = Object.values(liveData).filter(d=>d.fuel!=null);
   const avgFuel = fuelVals.length ? Math.round(fuelVals.reduce((s,d)=>s+d.fuel,0)/fuelVals.length) : null;
 
   const rows = [
-    {n:'Burning Index',v:bi,t:[20,40,70],l:['Low','Moderate','High','Very High']},
-    {n:'Spread Component',v:sc,t:[15,35,60],l:['Low','Moderate','High','Very High']},
-    {n:'Energy Release',v:erc,t:[25,45,65],l:['Low','Moderate','High','Very High']},
+    {n:'Burning Index*',v:bi,t:[20,40,70],l:['Low','Moderate','High','Very High']},
+    {n:'Spread Component*',v:sc,t:[15,35,60],l:['Low','Moderate','High','Very High']},
+    {n:'Energy Release*',v:erc,t:[25,45,65],l:['Low','Moderate','High','Very High']},
     {n:'1-hr Fuel Moisture',v:f1!=='--'?f1+'%':'--',t:[5,10,15],l:['Very High','High','Moderate','Low']},
     {n:'10-hr Fuel Moisture',v:avgFuel!=null?avgFuel+'% (live)':f10!=='--'?f10+'%':'--',t:[8,15,20],l:['Very High','High','Moderate','Low']},
     {n:'Haines Index',v:ha,t:[3,4,5],l:['Low','Moderate','High','Very High']},
@@ -627,6 +655,8 @@ function renderIndices(t,rh,w) {
     if(!isNaN(nv)) rt=rating(nv,r.t,r.l);
     return `<tr><td>${r.n}</td><td style="font-weight:600;font-family:'JetBrains Mono',monospace;">${r.v}</td><td class="${rc(rt)}" style="font-weight:600;">${rt}</td></tr>`;
   }).join('');
+  // Add FDOP note
+  document.getElementById('idxBody').innerHTML += `<tr><td colspan="3" style="font-size:10px; color:var(--text-dim); font-family:'JetBrains Mono',monospace; padding-top:8px;">* Estimated. Marin ECC uses FEMS values per FDOP for dispatch levels (Coastal/Inland/Watershed zones).</td></tr>`;
 }
 
 function renderStations() {
